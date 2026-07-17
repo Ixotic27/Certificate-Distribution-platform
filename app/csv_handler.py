@@ -30,7 +30,9 @@ class CSVHandler:
 
     @staticmethod
     def _normalize_key(key: str) -> str:
-        return "".join(ch for ch in (key or "").strip().lower() if ch.isalnum() or ch == "_")
+        # Remove all non-alphanumeric characters and convert to lowercase
+        # This makes "Student Id", "Student_Id", "StudentId" all match
+        return "".join(ch.lower() for ch in (key or "").strip() if ch.isalnum())
 
     @classmethod
     def _get_first(cls, row: Dict[str, str], keys: Iterable[str]) -> str:
@@ -55,10 +57,10 @@ class CSVHandler:
         """Return a canonical student dict regardless of CSV header variations."""
         return {
             "Name": self._get_first(row, ["Name", "Full Name", "Student Name"]),
-            "Student_Id": self._get_first(row, ["Student_Id", "Student ID", "StudentId", "Student_Id "]),
+            "Student_Id": self._get_first(row, ["Student_Id", "Student ID", "StudentId", "Student Id", "Student_Id "]),
             "Email_id": self._get_first(row, ["Email_id", "Email id", "Email", "Email ID", "Email Address"]),
             "Course": self._get_first(row, ["Course", "Program", "Branch"]),
-            "Code": self._get_first(row, ["Code", "Workshop", "Event", "Batch"]),
+            "Code": self._get_first(row, ["Code", "Workshop", "Event", "Batch", "Year"]),
         }
         
     def get_all_students(self) -> List[Dict[str, str]]:
@@ -152,4 +154,3 @@ class CSVHandler:
             
         except Exception:
             return False
-

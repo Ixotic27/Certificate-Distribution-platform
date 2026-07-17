@@ -37,8 +37,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 
 CSV_PATH = os.getenv("CSV_PATH", "students.csv")
+MANAGEMENT_CSV_PATH = os.getenv("MANAGEMENT_CSV_PATH", "management.csv")
 CERTIFICATES_DIR = os.getenv("CERTIFICATES_DIR", "certificates")
-TEMPLATE_IMAGE = os.getenv("CERTIFICATE_TEMPLATE_IMAGE", "templates/certificate_template.jpg")
+TEMPLATE_IMAGE = os.getenv("CERTIFICATE_TEMPLATE_IMAGE", "templates/student_certificate_template.jpg")
+MANAGEMENT_TEMPLATE_IMAGE = os.getenv("MANAGEMENT_CERTIFICATE_TEMPLATE_IMAGE", "templates/management_certificate_template.jpeg")
 
 # Admin key for protected endpoints (optional)
 ADMIN_KEY = os.getenv("ADMIN_KEY", "")
@@ -65,17 +67,27 @@ app.add_middleware(
 )
 
 
-# Initialize handlers
+# Initialize handlers for both students and management
 csv_handler = CSVHandler(_as_abs(CSV_PATH))
-cert_generator = CertificateGenerator(
+management_csv_handler = CSVHandler(_as_abs(MANAGEMENT_CSV_PATH))
+
+# Initialize separate certificate generators for students and management
+student_cert_generator = CertificateGenerator(
     template_path=_as_abs(TEMPLATE_IMAGE),
+    output_dir=_as_abs(CERTIFICATES_DIR),
+)
+
+management_cert_generator = CertificateGenerator(
+    template_path=_as_abs(MANAGEMENT_TEMPLATE_IMAGE),
     output_dir=_as_abs(CERTIFICATES_DIR),
 )
 
 
 # Serve templates directory as static (optional assets)
+# Serve templates directory as static files at /templates URL
 if TEMPLATES_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(TEMPLATES_DIR)), name="static")
+    app.mount("/templates", StaticFiles(directory=str(TEMPLATES_DIR)), name="templates")
+
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -106,7 +118,9 @@ async def health_check() -> Dict[str, Any]:
         Status message
     """
     csv_abs = _as_abs(CSV_PATH)
+    management_csv_abs = _as_abs(MANAGEMENT_CSV_PATH)
     template_abs = _as_abs(TEMPLATE_IMAGE)
+    management_template_abs = _as_abs(MANAGEMENT_TEMPLATE_IMAGE)
     certificates_abs = _as_abs(CERTIFICATES_DIR)
 
     return {
@@ -114,8 +128,12 @@ async def health_check() -> Dict[str, Any]:
         "paths": {
             "csv": csv_abs,
             "csv_exists": Path(csv_abs).exists(),
+            "management_csv": management_csv_abs,
+            "management_csv_exists": Path(management_csv_abs).exists(),
             "template_image": template_abs,
             "template_exists": Path(template_abs).exists(),
+            "management_template_image": management_template_abs,
+            "management_template_exists": Path(management_template_abs).exists(),
             "certificates_dir": certificates_abs,
             "certificates_dir_exists": Path(certificates_abs).exists(),
         },
@@ -123,47 +141,56 @@ async def health_check() -> Dict[str, Any]:
 
 
 @app.get("/verify")
-async def verify_certificate(name: str, student_id: str) -> Dict[str, Any]:
+async def verify_certificate(
+    name: str, 
+    student_id: str,
+    user_type: str = Query("student", regex="^(student|management)$")
+) -> Dict[str, Any]:
     """
-    Verify a certificate and return student information
+    Verify a certificate and return student/management information
     
     Args:
-        name: The student's name
-        student_id: The student's ID
+        name: The person's name
+        student_id: The person's ID
+        user_type: Type of user - 'student' or 'management'
         
     Returns:
-        Student information and validity status
+        Person information and validity status
         
     Raises:
-        HTTPException: If student not found
+        HTTPException: If person not found
     """
+    # Select the appropriate handler based on user type
+    handler = csv_handler if user_type == "student" else management_csv_handler
+    
     try:
-        student = csv_handler.find_student_by_name_and_id(name, student_id)
+        person = handler.find_student_by_name_and_id(name, student_id)
     except FileNotFoundError as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Student database CSV not available: {str(e)}",
+            detail=f"{user_type.capitalize()} database CSV not available: {str(e)}",
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Unexpected error while verifying student: {str(e)}",
+            detail=f"Unexpected error while verifying {user_type}: {str(e)}",
         )
     
-    if not student:
+    if not person:
         raise HTTPException(
             status_code=404, 
-            detail=f"Student not found with name: {name} and ID: {student_id}"
+            detail=f"{user_type.capitalize()} not found with name: {name} and ID: {student_id}"
         )
     
-    certificate_id = csv_handler.generate_certificate_id(student.get("Student_Id"))
+    certificate_id = handler.generate_certificate_id(person.get("Student_Id"))
     
     return {
-        "name": student.get("Name"),
-        "email": student.get("Email_id"),
-        "student_id": student.get("Student_Id"),
-        "course": student.get("Course"),
+        "name": person.get("Name"),
+        "email": person.get("Email_id"),
+        "student_id": person.get("Student_Id"),
+        "course": person.get("Course"),
         "certificate_id": certificate_id,
+        "user_type": user_type,
         "valid": True
     }
 
@@ -173,66 +200,77 @@ async def verify_certificate(name: str, student_id: str) -> Dict[str, Any]:
 async def get_certificate(
     name: str,
     student_id: str,
+    user_type: str = Query("student", regex="^(student|management)$"),
     force: bool = Query(False, description="Regenerate the certificate PDF even if it already exists"),
 ):
     """
     Generate certificate if not exists and return as downloadable PDF
     
     Args:
-        name: The student's name
-        student_id: The student's ID
+        name: The person's name
+        student_id: The person's ID
+        user_type: Type of user - 'student' or 'management'
+        force: Whether to regenerate the certificate
         
     Returns:
         PDF file as download
         
     Raises:
-        HTTPException: If student not found in database
+        HTTPException: If person not found in database
     """
-    # Verify student exists
+    # Select the appropriate handler based on user type
+    handler = csv_handler if user_type == "student" else management_csv_handler
+    cert_gen = student_cert_generator if user_type == "student" else management_cert_generator
+    
+    # Verify person exists
     try:
-        student = csv_handler.find_student_by_name_and_id(name, student_id)
+        person = handler.find_student_by_name_and_id(name, student_id)
     except FileNotFoundError as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Student database CSV not available: {str(e)}",
+            detail=f"{user_type.capitalize()} database CSV not available: {str(e)}",
         )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Unexpected error while looking up student: {str(e)}",
+            detail=f"Unexpected error while looking up {user_type}: {str(e)}",
         )
     
-    if not student:
+    if not person:
         raise HTTPException(
             status_code=404,
-            detail=f"Student not found with name: {name} and ID: {student_id}"
+            detail=f"{user_type.capitalize()} not found with name: {name} and ID: {student_id}"
         )
     
     # Generate certificate ID
-    certificate_id = csv_handler.generate_certificate_id(student.get("Student_Id"))
+    certificate_id = handler.generate_certificate_id(person.get("Student_Id"))
     
     # Render/WebService: cache PDFs on disk
-    if force or (not cert_generator.certificate_exists(certificate_id)):
+    if force or (not cert_gen.certificate_exists(certificate_id)):
         try:
-            cert_generator.generate_certificate(
-                student_name=student.get("Name"),
+            cert_gen.generate_certificate(
+                student_name=person.get("Name"),
                 certificate_id=certificate_id,
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error generating certificate: {str(e)}")
 
-    cert_path = cert_generator.get_certificate_path(certificate_id)
+    cert_path = cert_gen.get_certificate_path(certificate_id)
     return FileResponse(path=cert_path, media_type="application/pdf", filename=f"{certificate_id}.pdf")
 
 
 @app.get("/generate-all")
-async def generate_all_certificates(admin_key: str = Query(..., description="Admin key for authorization")) -> Dict[str, Any]:
+async def generate_all_certificates(
+    admin_key: str = Query(..., description="Admin key for authorization"),
+    user_type: str = Query("student", regex="^(student|management)$")
+) -> Dict[str, Any]:
     """
     Admin endpoint to generate all certificates from CSV
     Protected by admin key
     
     Args:
         admin_key: Admin authorization key
+        user_type: Type of users to generate certificates for - 'student' or 'management'
         
     Returns:
         Summary of generated certificates
@@ -247,25 +285,29 @@ async def generate_all_certificates(admin_key: str = Query(..., description="Adm
             detail="Invalid admin key"
         )
     
+    # Select the appropriate handler based on user type
+    handler = csv_handler if user_type == "student" else management_csv_handler
+    cert_gen = student_cert_generator if user_type == "student" else management_cert_generator
+    
     try:
-        students = csv_handler.get_all_students()
+        people = handler.get_all_students()
         generated = []
         skipped = []
         
-        for student in students:
-            student_id = student.get("Student_Id")
-            name = student.get("Name")
+        for person in people:
+            person_id = person.get("Student_Id")
+            name = person.get("Name")
             
             # Generate certificate ID
-            certificate_id = csv_handler.generate_certificate_id(student_id)
+            certificate_id = handler.generate_certificate_id(person_id)
             
             # Skip if already exists
-            if cert_generator.certificate_exists(certificate_id):
+            if cert_gen.certificate_exists(certificate_id):
                 skipped.append(certificate_id)
                 continue
             
             # Generate certificate
-            cert_generator.generate_certificate(
+            cert_gen.generate_certificate(
                 student_name=name,
                 certificate_id=certificate_id
             )
@@ -273,7 +315,8 @@ async def generate_all_certificates(admin_key: str = Query(..., description="Adm
         
         return {
             "success": True,
-            "total_students": len(students),
+            "user_type": user_type,
+            "total_people": len(people),
             "generated": len(generated),
             "skipped": len(skipped),
             "generated_ids": generated,

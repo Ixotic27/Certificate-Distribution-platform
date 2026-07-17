@@ -395,6 +395,41 @@
             background-clip: text;
         }
 
+        /* Toggle Switch Styles */
+        .toggle-container {
+            margin-bottom: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+
+        .toggle-wrapper {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1.5px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 0.5rem;
+            display: inline-flex;
+            gap: 0.5rem;
+            position: relative;
+        }
+
+        .toggle-option {
+            padding: 0.75rem 1.5rem;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: rgba(255, 255, 255, 0.6);
+            position: relative;
+            z-index: 1;
+        }
+
+        .toggle-option.active {
+            color: white;
+            background: linear-gradient(135deg, var(--indigo), var(--violet));
+            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
+        }
+
         .form-group {
             margin-bottom: 1.75rem;
             position: relative;
@@ -596,6 +631,11 @@
             .form-card {
                 padding: 2rem;
             }
+
+            .toggle-option {
+                padding: 0.6rem 1.2rem;
+                font-size: 0.9rem;
+            }
         }
     </style>
 </head>
@@ -612,12 +652,12 @@
     <nav>
         <div class="nav-container">
             <div class="logo-left">
-                <img class="logo-image" src="/static/logo.jpg" alt="College logo" />
+                <img class="logo-image" src="/templates/logo.jpg" alt="College logo" />
                 <span>Graphic Era Hill University</span>
             </div>
             <div class="nav-title">Certificate Portal</div>
             <div class="logo-right">
-                <img class="logo-image" src="/static/co-dev_logo.png" alt="Co-Dev logo" />
+                <img class="logo-image" src="/templates/co-dev_logo.png" alt="Co-Dev logo" />
                 <span>Co-Dev Club</span>
             </div>
         </div>
@@ -640,7 +680,21 @@
         <div class="form-container">
             <div class="form-card">
                 <h2 class="form-title">Find Your Certificate</h2>
+
+                <!-- Toggle Switch -->
+                <div class="toggle-container">
+                    <div class="toggle-wrapper">
+                        <div class="toggle-option active" id="studentToggle" onclick="switchMode('student')">
+                            Student
+                        </div>
+                        <div class="toggle-option" id="managementToggle" onclick="switchMode('management')">
+                            Management
+                        </div>
+                    </div>
+                </div>
+
                 <form id="certificateForm">
+                    <input type="hidden" id="userType" value="student">
                     <div class="form-group">
                         <input type="text" id="studentName" class="form-input" placeholder="Student Name" required>
                     </div>
@@ -657,16 +711,48 @@
 
             <div class="certificate-preview">
                 <div class="preview-card">
-                    <img src="/static/certificate_template.jpg" alt="Certificate template" style="width: 100%; height: auto; display: block; border-radius: 20px;" />
+                    <img id="certificatePreview" src="/templates/student_certificate_template.jpg" alt="Certificate template"
+                        style="width: 100%; height: auto; display: block; border-radius: 20px;" />
                 </div>
             </div>
         </div>
     </div>
 
     <script>
+        // Backend URL switch logic
+        const API_BASE_URL = (window.location.port === "5500" || window.location.port === "5000")
+            ? "http://localhost:8000"
+            : "";
+
+        let currentMode = 'student';
+
+
         function showFormPage() {
             document.getElementById('landingPage').style.display = 'none';
             document.getElementById('formPage').classList.add('active');
+        }
+
+        function switchMode(mode) {
+            currentMode = mode;
+            document.getElementById('userType').value = mode;
+
+            // Update toggle UI
+            document.getElementById('studentToggle').classList.remove('active');
+            document.getElementById('managementToggle').classList.remove('active');
+
+            if (mode === 'student') {
+                document.getElementById('studentToggle').classList.add('active');
+                // Update certificate preview to student template
+                document.getElementById('certificatePreview').src = '/templates/student_certificate_template.jpg';
+            } else {
+                document.getElementById('managementToggle').classList.add('active');
+                // Update certificate preview to management template
+                document.getElementById('certificatePreview').src = '/templates/management_certificate_template.jpeg';
+            }
+
+            // Clear any previous messages
+            const messageDiv = document.getElementById('message');
+            messageDiv.style.display = 'none';
         }
 
         const form = document.getElementById('certificateForm');
@@ -679,6 +765,7 @@
 
             const studentName = document.getElementById('studentName').value.trim();
             const studentId = document.getElementById('studentId').value.trim();
+            const userType = document.getElementById('userType').value;
 
             if (!studentName || !studentId) {
                 showMessage('Please enter both name and student ID', 'error');
@@ -691,17 +778,18 @@
             messageDiv.style.display = 'none';
 
             try {
-                // Verify student
-                const verifyResponse = await fetch(`/verify?name=${encodeURIComponent(studentName)}&student_id=${encodeURIComponent(studentId)}`);
+                // Verify student/management
+                const verifyResponse = await fetch(`${API_BASE_URL}/verify?name=${encodeURIComponent(studentName)}&student_id=${encodeURIComponent(studentId)}&user_type=${userType}`);
 
                 if (!verifyResponse.ok) {
-                    throw new Error('Student not found. Please check your name and student ID.');
+                    throw new Error(`${userType === 'student' ? 'Student' : 'Management team member'} not found. Please check your name and ID.`);
                 }
 
                 const verifyData = await verifyResponse.json();
 
                 // Download certificate
-                window.location.href = `/certificate?name=${encodeURIComponent(studentName)}&student_id=${encodeURIComponent(studentId)}`;
+                window.location.href = `${API_BASE_URL}/certificate?name=${encodeURIComponent(studentName)}&student_id=${encodeURIComponent(studentId)}&user_type=${userType}`;
+
 
                 showMessage(`✓ Certificate found for ${verifyData.name}! Download started...`, 'success');
 
